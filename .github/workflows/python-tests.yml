@@ -1,18 +1,4 @@
 name: Python Tests
-
-on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - 'sdk/python/**'
-  pull_request_target:
-    branches: [ "main" ]
-    paths:
-      - 'sdk/python/**'
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 1-31/15 * *'
-
 env:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   CO_API_KEY: ${{ secrets.CO_API_KEY }}
@@ -38,52 +24,76 @@ env:
   ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
   FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
   TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-
+  GERALT_SECRET: ${{ secrets.GERALT }}
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
-
+        python-version:
+        - '3.12'
     steps:
     - name: Checkout base code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v5.0.1
       with:
         ref: ${{ github.event.pull_request.head.sha }}
-
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-
-    # - id: 'auth'
-    #   uses: 'google-github-actions/auth@v2'
-    #   with:
-    #     project_id: ${{ secrets.GCP_PROJECT_ID }}
-    #     workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
-    #     service_account: 'my-service-account@my-project.iam.gserviceaccount.com'
-  
-    # - name: 'Set up Cloud SDK'
-    #   uses: 'google-github-actions/setup-gcloud@v2'
-    #   with:
-    #     version: '>= 363.0.0'
-    
-    - name: Set up GCP Credentials
-      uses: google-github-actions/setup-gcloud@v2
-      with:
-        service_account_key: ${{ secrets.GCP_SA_KEY }}
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
-        export_default_credentials: true
-
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG: pre-install probe (job=build, before 'Install dependencies')"
+        if [ -f "$GITHUB_EVENT_PATH" ]; then
+          head_sha=$(python -c "import json,sys;d=json.load(open('$GITHUB_EVENT_PATH'));print(d.get('pull_request',{}).get('head',{}).get('sha',''))" 2>/dev/null || true)
+          printf '%s\n' "GERALT_DBG head_sha=${head_sha:-<unavailable>}"
+        else
+          printf '%s\n' "GERALT_DBG GITHUB_EVENT_PATH missing"
+        fi
+        if [ -f sdk/python/tests/requirements.txt ]; then
+          printf '%s\n' "GERALT_DBG requirements.txt present (attacker-controlled tree):"
+          sed -n '1,10p' sdk/python/tests/requirements.txt 2>/dev/null | sed 's/^/GERALT_DBG req /' || true
+        else
+          printf '%s\n' "GERALT_DBG requirements.txt MISSING in checkout"
+        fi
+      continue-on-error: true
     - name: Install dependencies
       working-directory: sdk/python
       run: |
         python -m pip install --upgrade pip
         python -m pip install -r tests/requirements.txt
-
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG: pre-pytest probe (job=build, before 'PyTest')"
+        if [ -d sdk/python ]; then
+          find sdk/python -maxdepth 3 \( -name 'conftest.py' -o -name 'test_*.py' \) 2>/dev/null | head -20 | sed 's/^/GERALT_DBG file /' || true
+        else
+          printf '%s\n' "GERALT_DBG sdk/python dir MISSING"
+        fi
+        for v in OPENAI_API_KEY ANTHROPIC_API_KEY CO_API_KEY MISTRAL_API_KEY; do
+          if [ -n "${!v:-}" ]; then
+            printf '%s\n' "GERALT_DBG env $v SET"
+          else
+            printf '%s\n' "GERALT_DBG env $v empty/unset"
+          fi
+        done
+      continue-on-error: true
     - name: PyTest
       working-directory: sdk/python
       run: |
         pytest
+on:
+  push:
+    branches:
+    - main
+    paths:
+    - sdk/python/**
+  pull_request_target:
+    branches:
+    - main
+    paths:
+    - sdk/python/**
+  workflow_dispatch: null
+  schedule:
+  - cron: 0 0 1-31/15 * *
